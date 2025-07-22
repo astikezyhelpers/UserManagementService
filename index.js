@@ -5,5 +5,5 @@ app.listen(process.env.PORT || 3001, (err) => {
         console.error('Error starting the server:', err.message);
         return;
     }
-    console.log(`User Management Service is running on port ${process.env.PORT || 3001}`);
+    console.log(`User Management Service is running on port http://localhost:${process.env.PORT || 3001}/api/auth`);
 });

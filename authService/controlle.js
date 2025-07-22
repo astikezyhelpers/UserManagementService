@@ -1,11 +1,12 @@
 import { HashedPassword } from "../hash.utils/hash.utils.js";
-//import bcrypt from 'bcrypt';
+import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
-import prisma from '../model/model.js';
+import prisma from '../models/model.js';
 import redis from '../config/redis.js';
-import { publishVerificationEmail } from '../messagebroker/publisher.js';
+import { publishVerificationEmail } from '../messabebroker/publisher.js';
 
 const JWT_SECRET = process.env.JWT_SECRET;
+const REFRESH_JWT_SECRET = process.env.REFRESH_JWT_SECRET
 const VERIFICATION_TTL = 60 * 15; // 15 minutes
 
 /**
@@ -13,15 +14,15 @@ const VERIFICATION_TTL = 60 * 15; // 15 minutes
  */
 export const registerUser = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email,password,first_name,last_name,phone_number} = req.body;
     const existing = await prisma.users.findUnique({ where: { email } });
     if (existing) {
       return res.status(400).json({ message: 'Email already registered' });
     }
 
-    const hashed = await bcrypt.HashedPassword(password, 10);
+    const hashed = await HashedPassword(password, 10);
     const user = await prisma.users.create({
-      data: { email, password_hash: hashed },
+      data: { email, password_hash: hashed,first_name,last_name,phone_number},
     });
 
     // Generate JWT token for verification
@@ -92,12 +93,12 @@ export const loginUser = async (req, res) => {
   // Issue tokens
   const accessToken = jwt.sign(
     { userId: user.id, email: user.email },
-    process.env.JWT_SECRET,
+    JWT_SECRET,
     { expiresIn: '15m' }
   );
   const refreshToken = jwt.sign(
     { userId: user.id, email: user.email },
-    process.env.JWT_REFRESH_SECRET,
+    REFRESH_JWT_SECRET,
     { expiresIn: '7d' }
   );
 
@@ -111,13 +112,13 @@ export const loginUser = async (req, res) => {
   res
     .cookie('accessToken', accessToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: process.env.NODE_ENV === 'development',
       sameSite: 'strict',
       maxAge: 15 * 60 * 1000 // 15 minutes
     })
     .cookie('refreshToken', refreshToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: process.env.NODE_ENV === 'development',
       sameSite: 'strict',
       maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
     })
@@ -134,7 +135,7 @@ export const refreshAccessToken = async (req, res) => {
 
   try {
     // Verify refresh token
-    const payload = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+    const payload = jwt.verify(refreshToken, REFRESH_JWT_SECRET);
 
     // Check if refresh token is in Redis
     const storedToken = await redis.get(`refresh:${payload.userId}`);
@@ -144,7 +145,7 @@ export const refreshAccessToken = async (req, res) => {
     // Issue new access token
     const newAccessToken = jwt.sign(
       { userId: payload.userId, email: payload.email },
-      process.env.JWT_SECRET,
+      JWT_SECRET,
       { expiresIn: '15m' }
     );
 
@@ -152,7 +153,7 @@ export const refreshAccessToken = async (req, res) => {
     res
       .cookie('accessToken', newAccessToken, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
+        secure: process.env.NODE_ENV === 'development',
         sameSite: 'strict',
         maxAge: 15 * 60 * 1000 // 15 minutes
       })
@@ -248,6 +249,40 @@ export const deleteUser = async (req, res) => {
     if (err.code === 'P2025') {
       return res.status(404).json({ error: 'User not found' });
     }
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// Logout Controller
+export const logoutUser = async (req, res) => {
+  try {
+    // Get user info from refresh token (if present)
+    const refreshToken = req.cookies.refreshToken;
+    if (refreshToken) {
+      try {
+        const payload = jwt.verify(refreshToken, REFRESH_JWT_SECRET);
+        // Remove refresh token from Redis
+        await redis.del(`refresh:${payload.userId}`);
+      } catch (err) {
+        // Token might be expired or invalid, ignore
+      }
+    }
+
+    // Clear cookies
+    res
+      .clearCookie('accessToken', {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'development',
+        sameSite: 'strict',
+      })
+      .clearCookie('refreshToken', {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'development',
+        sameSite: 'strict',
+      })
+      .status(200)
+      .json({ message: 'Logged out successfully' });
+  } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
   }
 };

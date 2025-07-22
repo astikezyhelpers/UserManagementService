@@ -1,16 +1,17 @@
 import nodemailer from 'nodemailer';
 import dotenv from  'dotenv';
-dotenv.config();
+dotenv.config({path:'./.env'});
+console.log('EMAIL_USER:', process.env.EMAIL_USER, 'EMAIL_PASS:', process.env.EMAIL_PASS ? 'set' : 'not set');
 const transporter = nodemailer.createTransport({
-    service: 'gmail',
+    service: 'gmail', 
     auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
+        user: process.env.EMAIL_USER || 'sasikirandommara404@gmail.com',
+        pass: process.env.EMAIL_PASS || 'grzsezxhvgywpaxc'
     }
 });
 
 const sendEmail = async (to,token) => {
-    const verificationLink = `http://localhost:3001/verify-email?token=${token}`;
+    const verificationLink = `http://localhost:3001/api/auth/verify/${token}`;
     const mailOptions = {
         from: process.env.EMAIL_USER,
         to: to,
