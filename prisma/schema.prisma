@@ -1,0 +1,88 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model users {
+  id            String        @id @default(uuid()) @db.Uuid
+  email         String        @unique
+  password_hash String?
+  first_name    String?
+  last_name     String?
+  phone_number  String?
+  profile_image String?
+  is_verified   Boolean       @default(false)
+  is_active     Boolean       @default(true)
+  last_login_at DateTime      @default(now())
+  created_at    DateTime      @default(now())
+  updated_at    DateTime      @default(now())
+  UserRole      UserRole[]
+  UserSession   UserSession[]
+}
+
+model Role {
+  id              String           @id @default(uuid()) @db.Uuid
+  name            String           @unique
+  description     String?
+  is_active       Boolean          @default(true)
+  created_at      DateTime         @default(now())
+  updated_at      DateTime         @updatedAt
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+}
+
+model Permission {
+  id              String           @id @default(uuid()) @db.Uuid
+  name            String
+  resource        String
+  action          String
+  description     String?
+  created_at      DateTime         @default(now())
+  rolePermissions RolePermission[]
+}
+
+model UserRole {
+  user_id     String   @db.Uuid
+  role_id     String   @db.Uuid
+  company_id  String?  @db.Uuid
+  assigned_by String?  @db.Uuid
+  assigned_at DateTime @default(now())
+  is_active   Boolean  @default(true)
+
+  user users @relation(fields: [user_id], references: [id])
+  role Role  @relation(fields: [role_id], references: [id])
+
+  @@id([user_id, role_id])
+}
+
+model RolePermission {
+  role_id       String   @db.Uuid
+  permission_id String   @db.Uuid
+  created_at    DateTime @default(now())
+
+  role       Role       @relation(fields: [role_id], references: [id])
+  permission Permission @relation(fields: [permission_id], references: [id])
+
+  @@id([role_id, permission_id])
+}
+
+model UserSession {
+  id            String    @id @default(uuid()) @db.Uuid
+  user_id       String    @db.Uuid
+  token_hash    String
+  device_info   String?
+  ip_address    String?
+  user_agent    String?
+  expires_at    DateTime?
+  is_active     Boolean   @default(true)
+  created_at    DateTime  @default(now())
+  last_accessed DateTime?
+
+  user users @relation(fields: [user_id], references: [id])
+}
