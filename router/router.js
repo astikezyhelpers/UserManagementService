@@ -1,6 +1,6 @@
 import express from "express";
 import authenticateJWT from "../middleware/protected.js";
-import { registerUser,verifyEmail,loginUser, refreshAccessToken,getAllUsers,getUserById,updateUser,deleteUser,logoutUser } from "../authService/controlle.js";    
+import { registerUser,verifyEmail,loginUser, refreshAccessToken,getAllUsers,getUserById,updateUser,deleteUser,logoutUser } from "../authService/auth.controller.js";    
 const router = express.Router();
 router.post("/register", registerUser);
 router.get("/verify/:token", verifyEmail); 

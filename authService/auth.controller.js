@@ -3,7 +3,7 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import prisma from '../models/model.js';
 import redis from '../config/redis.js';
-import { publishVerificationEmail } from '../messabebroker/publisher.js';
+import { publishVerificationEmail } from '../messageBroker/publisher.js';
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const REFRESH_JWT_SECRET = process.env.REFRESH_JWT_SECRET
@@ -68,6 +68,7 @@ export const verifyEmail = async (req, res) => {
 
 const RATE_LIMIT_WINDOW = 10 * 60; // 10 minutes in seconds
 const RATE_LIMIT_MAX_ATTEMPTS = 5;
+
 export const loginUser = async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password)
@@ -89,6 +90,12 @@ export const loginUser = async (req, res) => {
   const isMatch = await bcrypt.compare(password, user.password_hash);
   if (!isMatch)
     return res.status(401).json({ error: 'Invalid email or password' });
+
+  // Update last login time
+  await prisma.users.update({
+    where: { id: user.id },
+    data: { last_login_at: new Date() }
+  });
 
   // Issue tokens
   const accessToken = jwt.sign(
@@ -175,6 +182,7 @@ export const getAllUsers = async (req, res) => {
         phone_number: true,
         is_verified: true,
         is_active: true,
+        last_login_at: true,
         created_at: true,
         updated_at: true,
       }
@@ -199,6 +207,7 @@ export const getUserById = async (req, res) => {
         phone_number: true,
         is_verified: true,
         is_active: true,
+        last_login_at: true,
         created_at: true,
         updated_at: true,
       }
@@ -214,10 +223,27 @@ export const getUserById = async (req, res) => {
 export const updateUser = async (req, res) => {
   try {
     const { id } = req.params;
-    const { first_name, last_name, phone_number, is_active } = req.body;
+    const { first_name, last_name, phone_number, email } = req.body;
+    
+    // Prevent email updates (company email should not be changed)
+    if (email !== undefined) {
+      return res.status(400).json({ 
+        error: 'Email cannot be updated. Please contact administrator for email changes.' 
+      });
+    }
+    
+    // Validate that only allowed fields are being updated
+    const allowedFields = {};
+    if (first_name !== undefined) allowedFields.first_name = first_name;
+    if (last_name !== undefined) allowedFields.last_name = last_name;
+    if (phone_number !== undefined) allowedFields.phone_number = phone_number;
+    
+    // Add updated_at timestamp
+    allowedFields.updated_at = new Date();
+    
     const user = await prisma.users.update({
       where: { id },
-      data: { first_name, last_name, phone_number, is_active },
+      data: allowedFields,
       select: {
         id: true,
         email: true,
@@ -226,6 +252,7 @@ export const updateUser = async (req, res) => {
         phone_number: true,
         is_verified: true,
         is_active: true,
+        last_login_at: true,
         created_at: true,
         updated_at: true,
       }
