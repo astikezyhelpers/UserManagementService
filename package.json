@@ -1,0 +1,31 @@
+{
+  "name": "usermanagementservice",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "- **Service Name**: User Management Service\r - **Port**: 3001\r - **Database**: PostgreSQL\r - **Framework**: Node.js with Express.js\r - **Authentication**: JWT (JSON Web Tokens)\r - **API Style**: RESTful APIs",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "nodemon index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@prisma/client": "^6.12.0",
+    "amqplib": "^0.10.8",
+    "bcrypt": "^6.0.0",
+    "body-parser": "^2.2.0",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.0",
+    "express": "^5.1.0",
+    "ioredis": "^5.6.1",
+    "jsonwebtoken": "^9.0.2",
+    "nodemailer": "^7.0.5",
+    "redis": "^5.6.0"
+  },
+  "devDependencies": {
+    "prisma": "^6.12.0"
+  }
+}
