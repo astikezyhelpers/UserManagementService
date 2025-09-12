@@ -11,5 +11,5 @@ const connectRabbitMQ = async () => {
     throw error;
   }
 }
-//connectRabbitMQ()
+//nnectRabbitMQ()
 export { connectRabbitMQ, channel };

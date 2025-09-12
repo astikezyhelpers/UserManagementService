@@ -4,17 +4,30 @@ import jwt from 'jsonwebtoken';
 import prisma from '../models/model.js';
 import redis from '../config/redis.js';
 import { publishVerificationEmail } from '../messageBroker/publisher.js';
+import { JWT_SECRET, REFRESH_JWT_SECRET, VERIFICATION_TTL } from '../config/env.Validation.js'
 
-const JWT_SECRET = process.env.JWT_SECRET;
-const REFRESH_JWT_SECRET = process.env.REFRESH_JWT_SECRET
-const VERIFICATION_TTL = 60 * 15; // 15 minutes
+
 
 /**
  * User Registration controller
  */
+
 export const registerUser = async (req, res) => {
   try {
     const { email,password,first_name,last_name,phone_number} = req.body;
+
+    if (!email || !password || !first_name || !last_name || !phone_number) {
+      return res.status(400).json({ message: 'Required fields missing'});
+    } 
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ message: 'Invalid email format' });
+    }
+    if (password.length < 8){
+      return res.status(400).json({ message: 'Password must be at least 8 characters long' });
+    }
+
     const existing = await prisma.users.findUnique({ where: { email } });
     if (existing) {
       return res.status(400).json({ message: 'Email already registered' });
@@ -24,7 +37,7 @@ export const registerUser = async (req, res) => {
     const user = await prisma.users.create({
       data: { email, password_hash: hashed,first_name,last_name,phone_number},
     });
-
+   
     // Generate JWT token for verification
     const token = jwt.sign({ userId: user.id, email }, JWT_SECRET, { expiresIn: `${VERIFICATION_TTL}s` });
 
@@ -70,77 +83,102 @@ const RATE_LIMIT_WINDOW = 10 * 60; // 10 minutes in seconds
 const RATE_LIMIT_MAX_ATTEMPTS = 5;
 
 export const loginUser = async (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password)
-    return res.status(400).json({ error: 'Email and password are required' });
+  try {
+    const { email, password } = req.body;
 
-  // Rate limiting
-  const rateLimitKey = `login:attempts:${email}`;
-  const attempts = await redis.incr(rateLimitKey);
-  if (attempts === 1) await redis.expire(rateLimitKey, RATE_LIMIT_WINDOW);
-  if (attempts > RATE_LIMIT_MAX_ATTEMPTS)
-    return res.status(429).json({ error: 'Too many login attempts. Please try again later.' });
+    // Validate inputs
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
+    }
 
-  // User lookup
-  const user = await prisma.users.findUnique({ where: { email } });
-  if (!user || !user.password_hash)
-    return res.status(401).json({ error: 'Invalid email or password' });
+    // Rate limiting
+    const rateLimitKey = `login:attempts:${email}`;
+    try {
+      const attempts = await redis.incr(rateLimitKey);
+      if (attempts === 1) await redis.expire(rateLimitKey, RATE_LIMIT_WINDOW);
+      if (attempts > RATE_LIMIT_MAX_ATTEMPTS) {
+        return res.status(429).json({ error: 'Too many login attempts. Please try again later.' });
+      }
+    } catch (redisErr) {
+      console.error('Redis error during rate limiting:', redisErr.message);
+      // Fail open: allow login attempt even if Redis is down
+    }
 
-  // Password check
-  const isMatch = await bcrypt.compare(password, user.password_hash);
-  if (!isMatch)
-    return res.status(401).json({ error: 'Invalid email or password' });
+    // User lookup
+    const user = await prisma.users.findUnique({ where: { email } });
+    if (!user || !user.password_hash) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
 
-  // Update last login time
-  await prisma.users.update({
-    where: { id: user.id },
-    data: { last_login_at: new Date() }
-  });
+    // Password check
+    const isMatch = await bcrypt.compare(password, user.password_hash);
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
 
-  // Issue tokens
-  const accessToken = jwt.sign(
-    { userId: user.id, email: user.email },
-    JWT_SECRET,
-    { expiresIn: '15m' }
-  );
-  const refreshToken = jwt.sign(
-    { userId: user.id, email: user.email },
-    REFRESH_JWT_SECRET,
-    { expiresIn: '7d' }
-  );
+    // Update last login time
+    await prisma.users.update({
+      where: { id: user.id },
+      data: { last_login_at: new Date() }
+    });
 
-  // Store refresh token in Redis
-  await redis.set(`refresh:${user.id}`, refreshToken, 'EX', 7 * 24 * 60 * 60);
+    // Issue tokens
+    const accessToken = jwt.sign(
+      { userId: user.id, email: user.email },
+      JWT_SECRET,
+      { expiresIn: '15m' }
+    );
+    const refreshToken = jwt.sign(
+      { userId: user.id, email: user.email },
+      REFRESH_JWT_SECRET,
+      { expiresIn: '7d' }
+    );
 
-  // Optionally, reset rate limit on successful login
-  await redis.del(rateLimitKey);
+    // Store refresh token in Redis
+    try {
+      await redis.set(`refresh:${user.id}`, refreshToken, 'EX', 7 * 24 * 60 * 60);
+    } catch (redisErr) {
+      console.error('Redis error storing refresh token:', redisErr.message);
+      // Not fatal: user can still log in
+    }
 
-  // Set tokens as httpOnly cookies
-  res
-    .cookie('accessToken', accessToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'development',
-      sameSite: 'strict',
-      maxAge: 15 * 60 * 1000 // 15 minutes
-    })
-    .cookie('refreshToken', refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'development',
-      sameSite: 'strict',
-      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
-    })
-    .status(200)
-    .json({ message: 'Login successful' });
+    // Optionally, reset rate limit on successful login
+    try {
+      await redis.del(rateLimitKey);
+    } catch (redisErr) {
+      console.warn('Redis error resetting rate limit:', redisErr.message);
+    }
+
+    // Set tokens as httpOnly cookies (fix: secure only in production)
+    res
+      .cookie('accessToken', accessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        maxAge: 15 * 60 * 1000 // 15 minutes
+      })
+      .cookie('refreshToken', refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+      })
+      .status(200)
+      .json({ message: 'Login successful' });
+
+  } catch (err) {
+    console.error('LoginUser Error:', err.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 };
 
 // Refresh Token Controller
 export const refreshAccessToken = async (req, res) => {
-  // Try to get refresh token from cookie or body
-  const refreshToken = req.cookies.refreshToken || req.body.refreshToken;
-  if (!refreshToken)
-    return res.status(400).json({ error: 'Refresh token required' });
 
   try {
+    const refreshToken = req.cookies.refreshToken || req.body.refreshToken;
+    if (!refreshToken)
+      return res.status(400).json({ error: 'Refresh token required' });
     // Verify refresh token
     const payload = jwt.verify(refreshToken, REFRESH_JWT_SECRET);
 
@@ -160,7 +198,7 @@ export const refreshAccessToken = async (req, res) => {
     res
       .cookie('accessToken', newAccessToken, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'development',
+        secure: process.env.NODE_ENV === 'production',
         sameSite: 'strict',
         maxAge: 15 * 60 * 1000 // 15 minutes
       })
@@ -299,12 +337,12 @@ export const logoutUser = async (req, res) => {
     res
       .clearCookie('accessToken', {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'development',
+        secure: process.env.NODE_ENV === 'production',
         sameSite: 'strict',
       })
       .clearCookie('refreshToken', {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'development',
+        secure: process.env.NODE_ENV === 'production',
         sameSite: 'strict',
       })
       .status(200)
