@@ -1,7 +1,7 @@
 import nodemailer from 'nodemailer';
-import dotenv from  'dotenv';
-dotenv.config({path:'./.env'});
-console.log('EMAIL_USER:', process.env.EMAIL_USER, 'EMAIL_PASS:', process.env.EMAIL_PASS ? 'set' : 'not set');
+import { EMAIL_USER, EMAIL_PASS} from '../config/env.Validation.js' ; 
+import logger from '../logger.js';
+logger.info('EMAIL_USER:', EMAIL_USER, 'EMAIL_PASS:', EMAIL_PASS ? 'set' : 'not set');
 const transporter = nodemailer.createTransport({
     service: 'gmail', 
     auth: {
@@ -20,9 +20,9 @@ const sendEmail = async (to,token) => {
     };
     try {
         const info = await transporter.sendMail(mailOptions);
-        console.log('Email sent:', info.response);
+        logger.info('Email sent:', info.response);
     } catch (error) {
-        console.error('Error sending email:', error.message);
+        logger.error('Error sending email:', error.message);
     }
 };
 export default sendEmail;

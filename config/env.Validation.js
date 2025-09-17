@@ -13,6 +13,8 @@ for (const env of requiredEnvs) {
 export const JWT_SECRET = process.env.JWT_SECRET;
 export const REFRESH_JWT_SECRET = process.env.REFRESH_JWT_SECRET;
 export const VERIFICATION_TTL = parseInt(process.env.VERIFICATION_TTL, 10);
+export const EMAIL_USER = process.env.EMAIL_USER;
+export const EMAIL_PASS = process.env.EMAIL_PASS;
 
 
 if (isNaN(VERIFICATION_TTL) || VERIFICATION_TTL <= 0) {

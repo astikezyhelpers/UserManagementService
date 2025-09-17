@@ -5,6 +5,10 @@ import prisma from '../models/model.js';
 import redis from '../config/redis.js';
 import { publishVerificationEmail } from '../messageBroker/publisher.js';
 import { JWT_SECRET, REFRESH_JWT_SECRET, VERIFICATION_TTL } from '../config/env.Validation.js'
+import logger from '../logger.js'
+
+
+
 
 
 
@@ -14,6 +18,7 @@ import { JWT_SECRET, REFRESH_JWT_SECRET, VERIFICATION_TTL } from '../config/env.
 
 export const registerUser = async (req, res) => {
   try {
+    console.log('received data from frontend',req.body);
     const { email,password,first_name,last_name,phone_number} = req.body;
 
     if (!email || !password || !first_name || !last_name || !phone_number) {
@@ -38,18 +43,20 @@ export const registerUser = async (req, res) => {
       data: { email, password_hash: hashed,first_name,last_name,phone_number},
     });
    
-    // Generate JWT token for verification
+    
     const token = jwt.sign({ userId: user.id, email }, JWT_SECRET, { expiresIn: `${VERIFICATION_TTL}s` });
 
-    // Store in Redis
+    
     await redis.set(`verify:${token}`, user.id, 'EX', VERIFICATION_TTL);
 
-    // Publish to RabbitMQ
+    
     await publishVerificationEmail({ email, token });
 
-    res.status(201).json({ message: 'Registration successful, verification email sent.' });
+    res.status(201).json({ message: 'Registration successful, verification email sent.',
+      token: token
+     });
   } catch (err) {
-    console.error('RegisterError:', err.message);
+    logger.error('RegisterError:', err.message);
     res.status(500).json({ message: 'Internal server error' });
   }
 };
@@ -72,9 +79,9 @@ export const verifyEmail = async (req, res) => {
     });
     await redis.del(`verify:${token}`);
 
-    res.json({ message: 'Email verified successfully.' });
+    res.status(200).json({ message: 'Email verified successfully.' });
   } catch (err) {
-    console.error('VerifyError:', err.message);
+    logger.error('VerifyError:', err.message);
     res.status(400).json({ message: 'Invalid or expired token' });
   }
 };
@@ -100,7 +107,7 @@ export const loginUser = async (req, res) => {
         return res.status(429).json({ error: 'Too many login attempts. Please try again later.' });
       }
     } catch (redisErr) {
-      console.error('Redis error during rate limiting:', redisErr.message);
+      logger.error('Redis error during rate limiting:', redisErr.message);
       // Fail open: allow login attempt even if Redis is down
     }
 
@@ -138,7 +145,7 @@ export const loginUser = async (req, res) => {
     try {
       await redis.set(`refresh:${user.id}`, refreshToken, 'EX', 7 * 24 * 60 * 60);
     } catch (redisErr) {
-      console.error('Redis error storing refresh token:', redisErr.message);
+      logger.error('Redis error storing refresh token:', redisErr.message);
       // Not fatal: user can still log in
     }
 
@@ -146,7 +153,7 @@ export const loginUser = async (req, res) => {
     try {
       await redis.del(rateLimitKey);
     } catch (redisErr) {
-      console.warn('Redis error resetting rate limit:', redisErr.message);
+      logger.warn('Redis error resetting rate limit:', redisErr.message);
     }
 
     // Set tokens as httpOnly cookies (fix: secure only in production)
@@ -164,10 +171,13 @@ export const loginUser = async (req, res) => {
         maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
       })
       .status(200)
-      .json({ message: 'Login successful' });
+      .json({ message: 'Login successful',
+        accessToken: accessToken,
+        refreshToken: refreshToken
+       });
 
   } catch (err) {
-    console.error('LoginUser Error:', err.message);
+    logger.error('LoginUser Error:', err.message);
     res.status(500).json({ error: 'Internal server error' });
   }
 };
@@ -203,7 +213,9 @@ export const refreshAccessToken = async (req, res) => {
         maxAge: 15 * 60 * 1000 // 15 minutes
       })
       .status(200)
-      .json({ message: 'Access token refreshed' });
+      .json({ message: 'Access token refreshed',
+        accessToken: newAccessToken
+       });
   } catch (err) {
     return res.status(401).json({ error: 'Invalid or expired refresh token' });
   }
@@ -261,10 +273,10 @@ export const getUserById = async (req, res) => {
 export const updateUser = async (req, res) => {
   try {
     const { id } = req.params;
-    const { first_name, last_name, phone_number, email } = req.body;
+    const updates  = {...req.body};
     
     // Prevent email updates (company email should not be changed)
-    if (email !== undefined) {
+    if (updates.email !== undefined) {
       return res.status(400).json({ 
         error: 'Email cannot be updated. Please contact administrator for email changes.' 
       });
@@ -272,9 +284,9 @@ export const updateUser = async (req, res) => {
     
     // Validate that only allowed fields are being updated
     const allowedFields = {};
-    if (first_name !== undefined) allowedFields.first_name = first_name;
-    if (last_name !== undefined) allowedFields.last_name = last_name;
-    if (phone_number !== undefined) allowedFields.phone_number = phone_number;
+    if (updates.first_name !== undefined) allowedFields.first_name = updates.first_name;
+    if (updates.last_name !== undefined) allowedFields.last_name = updates.last_name;
+    if (updates.phone_number !== undefined) allowedFields.phone_number = updates.phone_number;
     
     // Add updated_at timestamp
     allowedFields.updated_at = new Date();
@@ -300,6 +312,7 @@ export const updateUser = async (req, res) => {
     if (err.code === 'P2025') {
       return res.status(404).json({ error: 'User not found' });
     }
+    logger.error('UpdateUser Error:', err.message);
     res.status(500).json({ error: 'Internal server error' });
   }
 };

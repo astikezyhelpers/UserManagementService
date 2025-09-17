@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken';
+import logger from '../logger.js';
 
 const authenticateJWT = (req, res, next) => {
   // Try to get token from cookie (recommended) or Authorization header (fallback)
