@@ -1,4 +1,5 @@
-import app from './app.js'
+import app from './app.js';
+import logger from './logger.js';
 
 const PORT = process.env.PORT || 3001;
 
@@ -13,7 +14,7 @@ const gracefulShutdown = (signal) => {
 
 const server = app.listen(PORT, '0.0.0.0', (err) => {
     if (err) {
-        console.error('❌ Error starting the server:', err.message);
+        logger.error('Error starting the server:', err.message);
         return;
     }
     console.log(`🚀 User Management Service is running on port http://localhost:${PORT}/api/auth`);
@@ -63,4 +64,5 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
   process.exit(1);
+    logger.info(`User Management Service is running on port http://localhost:${process.env.PORT || 3001}/api/auth`);
 });

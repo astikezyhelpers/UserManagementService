@@ -1,7 +1,8 @@
 import express from "express";
 import authenticateJWT from "../middleware/protected.js";
-import { registerUser,verifyEmail,loginUser, refreshAccessToken,getAllUsers,getUserById,updateUser,deleteUser,logoutUser } from "../authService/auth.controller.js";
-import prisma from '../models/model.js';
+import { registerUser,verifyEmail,loginUser, refreshAccessToken,getAllUsers,getUserById,updateUser,deleteUser,logoutUser } from "../authService/auth.controller.js"; 
+import Input from "../middleware/validationmiddleware.js"; 
+import { userRegister,userLogin,updateUserinput } from "../inputvalidation/validation.js";  
 const router = express.Router();
 
 // Debug endpoint to test user lookup
@@ -47,12 +48,12 @@ router.post('/debug/lookup-user', async (req, res) => {
 
 router.post("/register", registerUser);
 router.get("/verify/:token", verifyEmail); 
-router.post("/login", loginUser);
+router.post("/login",Input(userLogin), loginUser);
 router.post("/logout",logoutUser)
 router.post("/refresh-token", refreshAccessToken); 
 router.get('/users',authenticateJWT,getAllUsers);
 router.get('/users/:id',authenticateJWT,getUserById);
-router.put('/users/:id',authenticateJWT,updateUser);
+router.put('/users/:id',Input(updateUserinput),authenticateJWT,updateUser);
 router.delete('/users/:id',authenticateJWT,deleteUser);
 
 export default router;

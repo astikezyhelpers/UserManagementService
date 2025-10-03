@@ -1,4 +1,5 @@
 import { connectRabbitMQ } from '../config/rabbitmq.js';
+import logger from '../logger.js';
 
 let channel;
 const QUEUE_NAME = 'email_verification';
@@ -9,7 +10,7 @@ const QUEUE_NAME = 'email_verification';
 export const initPublisher = async () => {
   channel = await connectRabbitMQ();
   await channel.assertQueue(QUEUE_NAME, { durable: true });
-  console.log(`Publisher initialized, queue: ${QUEUE_NAME}`);
+  logger.info(`Publisher initialized, queue: ${QUEUE_NAME}`);
 };
 
 /*
@@ -25,5 +26,5 @@ export const publishVerificationEmail = async (payload) => {
     Buffer.from(JSON.stringify(payload)),
     { persistent: true }
   );
-  console.log(`📨 Published to ${QUEUE_NAME}:`, payload);
+  logger.info(`📨 Published to ${QUEUE_NAME}:`, payload);
 };
