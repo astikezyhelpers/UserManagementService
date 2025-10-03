@@ -10,19 +10,31 @@ datasource db {
 
 model users {
   id            String        @id @default(uuid()) @db.Uuid
-  email         String        @unique
+  email         String        @unique  // Now encrypted
   password_hash String?
-  first_name    String?
-  last_name     String?
-  phone_number  String?
+  first_name    String?       // Now encrypted
+  last_name     String?       // Now encrypted
+  phone_number  String?       // Now encrypted
   profile_image String?
   is_verified   Boolean       @default(false)
   is_active     Boolean       @default(true)
   last_login_at DateTime      @default(now())
   created_at    DateTime      @default(now())
   updated_at    DateTime      @default(now())
+  
+  // Search tokens for encrypted fields (for searching without decryption)
+  email_search_token    String?  @unique  // Hash of email for searching
+  phone_search_token    String?  // Hash of phone for searching
+  
+  // Encryption metadata
+  encryption_version    Int      @default(1)  // For key rotation
+  
   UserRole      UserRole[]
   UserSession   UserSession[]
+
+  @@index([email_search_token], name: "idx_users_email_search")
+  @@index([phone_search_token], name: "idx_users_phone_search")
+  @@index([encryption_version], name: "idx_users_encryption_version")
 }
 
 model Role {
