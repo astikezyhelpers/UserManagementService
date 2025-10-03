@@ -4,17 +4,35 @@ import jwt from 'jsonwebtoken';
 import prisma from '../models/model.js';
 import redis from '../config/redis.js';
 import { publishVerificationEmail } from '../messageBroker/publisher.js';
+import { JWT_SECRET, REFRESH_JWT_SECRET, VERIFICATION_TTL } from '../config/env.Validation.js'
+import logger from '../logger.js'
 
-const JWT_SECRET = process.env.JWT_SECRET;
-const REFRESH_JWT_SECRET = process.env.REFRESH_JWT_SECRET
-const VERIFICATION_TTL = 60 * 15; // 15 minutes
+
+
+
+
 
 /**
  * User Registration controller
  */
+
 export const registerUser = async (req, res) => {
   try {
+    console.log('received data from frontend',req.body);
     const { email,password,first_name,last_name,phone_number} = req.body;
+
+    if (!email || !password || !first_name || !last_name || !phone_number) {
+      return res.status(400).json({ message: 'Required fields missing'});
+    } 
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ message: 'Invalid email format' });
+    }
+    if (password.length < 8){
+      return res.status(400).json({ message: 'Password must be at least 8 characters long' });
+    }
+
     const existing = await prisma.users.findUnique({ where: { email } });
     if (existing) {
       return res.status(400).json({ message: 'Email already registered' });
@@ -24,19 +42,21 @@ export const registerUser = async (req, res) => {
     const user = await prisma.users.create({
       data: { email, password_hash: hashed,first_name,last_name,phone_number},
     });
-
-    // Generate JWT token for verification
+   
+    
     const token = jwt.sign({ userId: user.id, email }, JWT_SECRET, { expiresIn: `${VERIFICATION_TTL}s` });
 
-    // Store in Redis
+    
     await redis.set(`verify:${token}`, user.id, 'EX', VERIFICATION_TTL);
 
-    // Publish to RabbitMQ
+    
     await publishVerificationEmail({ email, token });
 
-    res.status(201).json({ message: 'Registration successful, verification email sent.' });
+    res.status(201).json({ message: 'Registration successful, verification email sent.',
+      token: token
+     });
   } catch (err) {
-    console.error('RegisterError:', err.message);
+    logger.error('RegisterError:', err.message);
     res.status(500).json({ message: 'Internal server error' });
   }
 };
@@ -59,9 +79,9 @@ export const verifyEmail = async (req, res) => {
     });
     await redis.del(`verify:${token}`);
 
-    res.json({ message: 'Email verified successfully.' });
+    res.status(200).json({ message: 'Email verified successfully.' });
   } catch (err) {
-    console.error('VerifyError:', err.message);
+    logger.error('VerifyError:', err.message);
     res.status(400).json({ message: 'Invalid or expired token' });
   }
 };
@@ -70,77 +90,105 @@ const RATE_LIMIT_WINDOW = 10 * 60; // 10 minutes in seconds
 const RATE_LIMIT_MAX_ATTEMPTS = 5;
 
 export const loginUser = async (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password)
-    return res.status(400).json({ error: 'Email and password are required' });
+  try {
+    const { email, password } = req.body;
 
-  // Rate limiting
-  const rateLimitKey = `login:attempts:${email}`;
-  const attempts = await redis.incr(rateLimitKey);
-  if (attempts === 1) await redis.expire(rateLimitKey, RATE_LIMIT_WINDOW);
-  if (attempts > RATE_LIMIT_MAX_ATTEMPTS)
-    return res.status(429).json({ error: 'Too many login attempts. Please try again later.' });
+    // Validate inputs
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
+    }
 
-  // User lookup
-  const user = await prisma.users.findUnique({ where: { email } });
-  if (!user || !user.password_hash)
-    return res.status(401).json({ error: 'Invalid email or password' });
+    // Rate limiting
+    const rateLimitKey = `login:attempts:${email}`;
+    try {
+      const attempts = await redis.incr(rateLimitKey);
+      if (attempts === 1) await redis.expire(rateLimitKey, RATE_LIMIT_WINDOW);
+      if (attempts > RATE_LIMIT_MAX_ATTEMPTS) {
+        return res.status(429).json({ error: 'Too many login attempts. Please try again later.' });
+      }
+    } catch (redisErr) {
+      logger.error('Redis error during rate limiting:', redisErr.message);
+      // Fail open: allow login attempt even if Redis is down
+    }
 
-  // Password check
-  const isMatch = await bcrypt.compare(password, user.password_hash);
-  if (!isMatch)
-    return res.status(401).json({ error: 'Invalid email or password' });
+    // User lookup
+    const user = await prisma.users.findUnique({ where: { email } });
+    if (!user || !user.password_hash) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
 
-  // Update last login time
-  await prisma.users.update({
-    where: { id: user.id },
-    data: { last_login_at: new Date() }
-  });
+    // Password check
+    const isMatch = await bcrypt.compare(password, user.password_hash);
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
 
-  // Issue tokens
-  const accessToken = jwt.sign(
-    { userId: user.id, email: user.email },
-    JWT_SECRET,
-    { expiresIn: '15m' }
-  );
-  const refreshToken = jwt.sign(
-    { userId: user.id, email: user.email },
-    REFRESH_JWT_SECRET,
-    { expiresIn: '7d' }
-  );
+    // Update last login time
+    await prisma.users.update({
+      where: { id: user.id },
+      data: { last_login_at: new Date() }
+    });
 
-  // Store refresh token in Redis
-  await redis.set(`refresh:${user.id}`, refreshToken, 'EX', 7 * 24 * 60 * 60);
+    // Issue tokens
+    const accessToken = jwt.sign(
+      { userId: user.id, email: user.email },
+      JWT_SECRET,
+      { expiresIn: '15m' }
+    );
+    const refreshToken = jwt.sign(
+      { userId: user.id, email: user.email },
+      REFRESH_JWT_SECRET,
+      { expiresIn: '7d' }
+    );
 
-  // Optionally, reset rate limit on successful login
-  await redis.del(rateLimitKey);
+    // Store refresh token in Redis
+    try {
+      await redis.set(`refresh:${user.id}`, refreshToken, 'EX', 7 * 24 * 60 * 60);
+    } catch (redisErr) {
+      logger.error('Redis error storing refresh token:', redisErr.message);
+      // Not fatal: user can still log in
+    }
 
-  // Set tokens as httpOnly cookies
-  res
-    .cookie('accessToken', accessToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'development',
-      sameSite: 'strict',
-      maxAge: 15 * 60 * 1000 // 15 minutes
-    })
-    .cookie('refreshToken', refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'development',
-      sameSite: 'strict',
-      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
-    })
-    .status(200)
-    .json({ message: 'Login successful' });
+    // Optionally, reset rate limit on successful login
+    try {
+      await redis.del(rateLimitKey);
+    } catch (redisErr) {
+      logger.warn('Redis error resetting rate limit:', redisErr.message);
+    }
+
+    // Set tokens as httpOnly cookies (fix: secure only in production)
+    res
+      .cookie('accessToken', accessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        maxAge: 15 * 60 * 1000 // 15 minutes
+      })
+      .cookie('refreshToken', refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+      })
+      .status(200)
+      .json({ message: 'Login successful',
+        accessToken: accessToken,
+        refreshToken: refreshToken
+       });
+
+  } catch (err) {
+    logger.error('LoginUser Error:', err.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 };
 
 // Refresh Token Controller
 export const refreshAccessToken = async (req, res) => {
-  // Try to get refresh token from cookie or body
-  const refreshToken = req.cookies.refreshToken || req.body.refreshToken;
-  if (!refreshToken)
-    return res.status(400).json({ error: 'Refresh token required' });
 
   try {
+    const refreshToken = req.cookies.refreshToken || req.body.refreshToken;
+    if (!refreshToken)
+      return res.status(400).json({ error: 'Refresh token required' });
     // Verify refresh token
     const payload = jwt.verify(refreshToken, REFRESH_JWT_SECRET);
 
@@ -160,12 +208,14 @@ export const refreshAccessToken = async (req, res) => {
     res
       .cookie('accessToken', newAccessToken, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'development',
+        secure: process.env.NODE_ENV === 'production',
         sameSite: 'strict',
         maxAge: 15 * 60 * 1000 // 15 minutes
       })
       .status(200)
-      .json({ message: 'Access token refreshed' });
+      .json({ message: 'Access token refreshed',
+        accessToken: newAccessToken
+       });
   } catch (err) {
     return res.status(401).json({ error: 'Invalid or expired refresh token' });
   }
@@ -223,10 +273,10 @@ export const getUserById = async (req, res) => {
 export const updateUser = async (req, res) => {
   try {
     const { id } = req.params;
-    const { first_name, last_name, phone_number, email } = req.body;
+    const updates  = {...req.body};
     
     // Prevent email updates (company email should not be changed)
-    if (email !== undefined) {
+    if (updates.email !== undefined) {
       return res.status(400).json({ 
         error: 'Email cannot be updated. Please contact administrator for email changes.' 
       });
@@ -234,9 +284,9 @@ export const updateUser = async (req, res) => {
     
     // Validate that only allowed fields are being updated
     const allowedFields = {};
-    if (first_name !== undefined) allowedFields.first_name = first_name;
-    if (last_name !== undefined) allowedFields.last_name = last_name;
-    if (phone_number !== undefined) allowedFields.phone_number = phone_number;
+    if (updates.first_name !== undefined) allowedFields.first_name = updates.first_name;
+    if (updates.last_name !== undefined) allowedFields.last_name = updates.last_name;
+    if (updates.phone_number !== undefined) allowedFields.phone_number = updates.phone_number;
     
     // Add updated_at timestamp
     allowedFields.updated_at = new Date();
@@ -262,6 +312,7 @@ export const updateUser = async (req, res) => {
     if (err.code === 'P2025') {
       return res.status(404).json({ error: 'User not found' });
     }
+    logger.error('UpdateUser Error:', err.message);
     res.status(500).json({ error: 'Internal server error' });
   }
 };
@@ -299,12 +350,12 @@ export const logoutUser = async (req, res) => {
     res
       .clearCookie('accessToken', {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'development',
+        secure: process.env.NODE_ENV === 'production',
         sameSite: 'strict',
       })
       .clearCookie('refreshToken', {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'development',
+        secure: process.env.NODE_ENV === 'production',
         sameSite: 'strict',
       })
       .status(200)
